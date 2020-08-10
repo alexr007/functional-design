@@ -39,7 +39,7 @@ object spreadsheet {
     def cols: Int
     def rows: Int
 
-    def valueAt(col: Int, row: Int): CellContents
+    def valueAt(col: Int, row: Int): CalculatedValue
 
     final def scan(range: Range): Stream[Cell] = {
       val minRow = range.minRow.getOrElse(0)
@@ -62,61 +62,72 @@ object spreadsheet {
     def row(i: Int): Range = Range(Some(i), Some(i), None, None)
   }
 
-  final case class Cell(col: Int, row: Int, contents: CellContents)
+  final case class Cell(col: Int, row: Int, contents: CalculatedValue)
 
-  sealed trait CellContents
-  object CellContents {
-    final case class Error(message: String) extends CellContents
-    final case class Str(value: String)     extends CellContents
-    final case class Dbl(value: Double)     extends CellContents
-
-    /**
-     * EXERCISE 1
-     *
-     * Design a subtype of `CellContents` called `CalculatedValue`, which
-     * represents a value that is dynamically computed from a spreadsheet.
-     */
-    final case class CalculatedValue() extends CellContents { self =>
-
-      /**
-       * EXERCISE 2
-       *
-       * Add some operators to transform one `CalculatedValue` into another `CalculatedValue`. For
-       * example, one operator could "negate" a double expression.
-       */
-      def negate: CalculatedValue = ???
-
-      /**
-       * EXERCISE 3
-       *
-       * Add some operators to combine `CalculatedValue`. For example, one operator
-       * could sum two double expressions.
-       */
-      def sum(that: CalculatedValue): CalculatedValue = ???
-    }
-    object CalculatedValue {
-
-      /**
-       * EXERCISE 4
-       *
-       * Add a constructor that makes an CalculatedValue from a CellContents.
-       */
-      def const(contents: CellContents): CalculatedValue = ???
-
-      /**
-       * EXERCISE 5
-       *
-       * Add a constructor that provides access to the value of the
-       * specified cell, identified by col/row.
-       */
-      def at(col: Int, row: Int): CalculatedValue = ???
-    }
+  sealed trait Value
+  object Value {
+    final case class Error(message: String) extends Value
+    final case class Str(value: String)     extends Value
+    final case class Dbl(value: Double)     extends Value
   }
 
   /**
-   * EXERCISE 6
+   * EXERCISE 1
    *
-   * Describe a cell whose contents are the sum of other cells.
+   * Design a data type called `CalculatedValue`, which represents a `Value` that is dynamically
+   * computed from a `Spreadsheet`.
+   */
+  final case class CalculatedValue( /* ??? */ ) { self =>
+
+    /**
+     * EXERCISE 2
+     *
+     * Add an operator that returns a new `CalculatedValue` that is the negated version of this one.
+     */
+    def unary_- : CalculatedValue = ???
+
+    /**
+     * EXERCISE 3
+     *
+     * Add a binary operator `+` that returns a new `CalculatedValue` that is the sum of the two
+     * calculated values.
+     */
+    def +(that: CalculatedValue): CalculatedValue = ???
+
+    /**
+     * EXERCISE 4
+     *
+     * Add a binary operator `-` that returns a new `CalculatedValue` that is the difere;nce of the
+     * two calculated values.
+     */
+    def -(that: CalculatedValue): CalculatedValue = ???
+
+    protected def binaryOp(that: CalculatedValue)(error: String)(
+      f: PartialFunction[(Value, Value), Value]
+    ): CalculatedValue = ???
+  }
+  object CalculatedValue {
+
+    /**
+     * EXERCISE 5
+     *
+     * Add a constructor that makes an `CalculatedValue` from a `Value`.
+     */
+    def const(contents: Value): CalculatedValue = ???
+
+    /**
+     * EXERCISE 6
+     *
+     * Add a constructor that provides access to the value of the
+     * specified cell, identified by col/row.
+     */
+    def at(col: Int, row: Int): CalculatedValue = ???
+  }
+
+  /**
+   * EXERCISE 7
+   *
+   * Describe a cell whose contents are the sum of the cells at (0, 0) and (1, 0).
    */
   lazy val cell1: Cell = ???
 }
@@ -132,18 +143,26 @@ object etl {
   /**
    * Represents a row of data.
    */
-  final case class DataRow(row: Map[String, DataValue]) {
+  final case class DataRow(row: Map[String, DataValue]) { self =>
     def delete(name: String): DataRow = DataRow(row - name)
+
+    def map(name: String)(f: PartialFunction[DataValue, DataValue]): DataRow =
+      row.get(name).fold(self)(v => f.lift(v).fold(self)(v => DataRow(row.updated(name, v))))
 
     def rename(oldName: String, newName: String): DataRow =
       DataRow(row.get(oldName).fold(row)(value => (row - oldName).updated(newName, value)))
+
+    def coerce(name: String, dtype: DataType): DataRow =
+      row.get(name).fold(self)(v => v.coerce(dtype).fold(self)(v => DataRow(row + (name -> v))))
   }
 
   /**
    * Represents a stream of data.
    */
   final case class DataStream(foreach: (Try[DataRow] => Unit) => Unit) { self =>
-    def delete(name: String): DataStream = map(_.delete(name))
+    def coerce(name: String, dtype: DataType): DataStream = self.map(_.coerce(name, dtype))
+
+    def delete(name: String): DataStream = self.map(_.delete(name))
 
     def orElse(that: => DataStream): DataStream =
       DataStream { callback =>
@@ -155,6 +174,15 @@ object etl {
 
     def map(f: DataRow => DataRow): DataStream =
       DataStream(callback => self.foreach(a => callback(a.map(f))))
+
+    def mapColumn(name: String)(f: PartialFunction[DataValue, DataValue]): DataStream =
+      self.map(_.map(name)(f))
+
+    def merge(that: => DataStream): DataStream =
+      DataStream { callback =>
+        self.foreach(callback)
+        that.foreach(callback)
+      }
 
     def rename(oldName: String, newName: String): DataStream =
       self.map(_.rename(oldName, newName))
@@ -171,6 +199,13 @@ object etl {
    * `load`, which returns a `DataStream`.
    */
   type DataRepo
+
+  sealed trait FileFormat
+  object FileFormat {
+    case object Json extends FileFormat
+    case object Csv  extends FileFormat
+    case object Xml  extends FileFormat
+  }
 
   /**
    * EXERCISE 2
@@ -194,24 +229,36 @@ object etl {
 
     def coerce(otherType: DataType): Option[DataValue]
   }
+  object DataValue {}
 
   /**
+   * EXERCISE 4
+   *
    * `Pipeline` is a data type that models a transformation from an input data
    * set into an output data step, as a series of one or more individual
    * operations.
+   *
+   * Create a model of a pipeline, using `DataStream`.
    */
-  final case class Pipeline(run: () => DataStream) { self =>
+  final case class Pipeline( /* ??? */ ) { self =>
 
     /**
-     * EXERCISE 4
+     * EXERCISE 5
      *
      * Add a `merge` operator that models the merge of the output of this
      * pipeline with the output of the specified pipeline.
+     *
+     * {{{
+     * Merge Associativity:  (p1 merge p2) merge p3 == p1 merge (p2 merge p3)
+     * Merge Identity:       p merge Pipeline.empty == Pipeline.empty merge p == p
+     * Merge Commutativity:  p1 merge p2 == p2 merge p1
+     * Merge Duplication:    ???
+     * }}}
      */
     def merge(that: Pipeline): Pipeline = ???
 
     /**
-     * EXERCISE 5
+     * EXERCISE 6
      *
      * Add an `orElse` operator that models applying this pipeline, but if it
      * fails, switching over and trying another pipeline.
@@ -219,28 +266,28 @@ object etl {
     def orElse(that: Pipeline): Pipeline = ???
 
     /**
-     * EXERCISE 6
+     * EXERCISE 7
      *
      * Add an operator to rename a column in a pipeline.
      */
     def rename(oldName: String, newName: String): Pipeline = ???
 
     /**
-     * EXERCISE 7
+     * EXERCISE 8
      *
      * Add an operator to coerce a column into a specific type in a pipeline.
      */
     def coerce(column: String, newType: DataType): Pipeline = ???
 
     /**
-     * EXERCISE 8
+     * EXERCISE 9
      *
      * Add an operator to delete a column in a pipeline.
      */
     def delete(column: String): Pipeline = ???
 
     /**
-     * EXERCISE 9
+     * EXERCISE 10
      *
      * To replace nulls in the specified column with a specified value.
      */
@@ -249,7 +296,7 @@ object etl {
   object Pipeline {
 
     /**
-     * EXERCISE 10
+     * EXERCISE 11
      *
      * Add a constructor for `Pipeline` that models extraction of data from
      * the specified data repository.
@@ -258,7 +305,7 @@ object etl {
   }
 
   /**
-   * EXERCISE 11
+   * EXERCISE 12
    *
    * Create a pipeline that models extracts data from a URL, replacing all null
    * "age" columns with "0" as the default age, which renames a column "fname"
@@ -294,12 +341,15 @@ object pricing_fetcher {
   final case class Time(minuteOfHour: Int, hourOfDay: Int, dayOfWeek: DayOfWeek, weekOfMonth: Int, monthOfYear: Int)
 
   /**
-   * `Schedule` is a data type that models a schedule as a simple function,
-   * which specifies whether or not it is time to perform a fetch.
+   * EXERCISE 1
+   *
+   * `Schedule` is a data type that models a schedule, which has the ability to
+   * indicate whether at any given `java.time.Instant`, it is time to fetch the
+   * pricing data set.
    */
-  final case class Schedule(fetchNow: Time => Boolean) {
+  final case class Schedule( /* ??? */ ) { self =>
     /*
-     * EXERCISE 1
+     * EXERCISE 2
      *
      * Create an operator for schedule that allows composing two schedules to
      * yield the union of those schedules. That is, the fetch will occur
@@ -308,7 +358,7 @@ object pricing_fetcher {
     def union(that: Schedule): Schedule = ???
 
     /**
-     * EXERCISE 2
+     * EXERCISE 3
      *
      * Create an operator for schedule that allows composing two schedules to
      * yield the intersection of those schedules. That is, the fetch will occur
@@ -317,7 +367,7 @@ object pricing_fetcher {
     def intersection(that: Schedule): Schedule = ???
 
     /**
-     * EXERCISE 3
+     * EXERCISE 4
      *
      * Create a unary operator that returns a schedule that will never fetch
      * when the original schedule would fetch, and will always fetch when the
@@ -328,7 +378,7 @@ object pricing_fetcher {
   object Schedule {
 
     /**
-     * EXERCISE 4
+     * EXERCISE 5
      *
      * Create a constructor for Schedule that models fetching on specific weeks
      * of the month.
@@ -336,7 +386,7 @@ object pricing_fetcher {
     def weeks(weeks: Int*): Schedule = ???
 
     /**
-     * EXERCISE 5
+     * EXERCISE 6
      *
      * Create a constructor for Schedule that models fetching on specific days
      * of the week.
@@ -344,7 +394,7 @@ object pricing_fetcher {
     def daysOfTheWeek(daysOfTheWeek: DayOfWeek*): Schedule = ???
 
     /**
-     * EXERCISE 6
+     * EXERCISE 7
      *
      * Create a constructor for Schedule that models fetching on specific
      * hours of the day.
@@ -352,7 +402,7 @@ object pricing_fetcher {
     def hoursOfTheDay(hours: Int*): Schedule = ???
 
     /**
-     * EXERCISE 7
+     * EXERCISE 8
      *
      * Create a constructor for Schedule that models fetching on specific minutes
      * of the hour.
@@ -361,7 +411,7 @@ object pricing_fetcher {
   }
 
   /**
-   * EXERCISE 8
+   * EXERCISE 9
    *
    * Create a schedule that repeats every Wednesday, at 6:00 AM and 12:00 PM,
    * and at 5:30, 6:30, and 7:30 every Thursday.

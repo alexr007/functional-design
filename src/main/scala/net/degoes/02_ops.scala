@@ -1,4 +1,5 @@
 package net.degoes
+
 /*
  * INTRODUCTION
  *
@@ -42,7 +43,7 @@ object input_stream {
      * exhausted, it will close the first input stream, make the second
      * input stream, and continue reading from the second one.
      */
-    def ++(that: IStream): IStream = ???
+    def ++(that: => IStream): IStream = ???
 
     /**
      * EXERCISE 2
@@ -51,7 +52,7 @@ object input_stream {
      * try to create the first input stream, but if that fails by throwing
      * an exception, it will then try to create the second input stream.
      */
-    def orElse(that: IStream): IStream = ???
+    def orElse(that: => IStream): IStream = ???
 
     /**
      * EXERCISE 3
@@ -61,6 +62,19 @@ object input_stream {
      * before returning it.
      */
     def buffered: IStream = ???
+  }
+  object IStream {
+
+    /**
+     * Creates an empty stream.
+     */
+    val empty: IStream = IStream(() => new java.io.ByteArrayInputStream(Array.ofDim[Byte](0)))
+
+    /**
+     * Defers the construction of a `IStream` that might fail.
+     */
+    def suspend(is: => IStream): IStream =
+      IStream(() => is.createInputStream())
   }
 
   /**
@@ -110,7 +124,7 @@ object email_filter {
      * Add a "negate" operator that will match an email if this email filter
      * does NOT match an email.
      */
-    def negate: EmailFilter = ???
+    def unary_! : EmailFilter = ???
   }
   object EmailFilter {
     def senderIs(address: Address): EmailFilter = EmailFilter(_.sender == address)
@@ -205,10 +219,59 @@ object contact_processing {
       } yield add(newColumn, column).delete(column1).delete(column2)
   }
 
-  sealed trait MappingResult[+A]
+  /**
+   * A `MappingResult[A]` is the result of mapping a schema. It is either a failure, in which case
+   * there are 0 or more errors; or it is a success, in which case there are 0 or more warnings.
+   */
+  sealed trait MappingResult[+A] { self =>
+    import MappingResult._
+
+    def flatMap[B](f: A => MappingResult[B]): MappingResult[B] =
+      self match {
+        case Success(warnings, value) =>
+          f(value) match {
+            case Success(warnings2, value) => Success(warnings ++ warnings2, value)
+            case Failure(errors)           => Failure(errors)
+          }
+
+        case Failure(errors) => Failure(errors)
+      }
+
+    def orElse[A1 >: A](that: MappingResult[A1]): MappingResult[A1] =
+      self match {
+        case Success(warnings, value) => Success(warnings, value)
+        case Failure(errors) =>
+          that match {
+            case Success(warnings, value) => Success(warnings, value)
+            case Failure(errors2)         => Failure(errors ++ errors2)
+          }
+      }
+
+    def map[B](f: A => B): MappingResult[B] =
+      self match {
+        case Success(warnings, value) => Success(warnings, f(value))
+        case Failure(errors)          => Failure(errors)
+      }
+
+    def zip[B](that: MappingResult[B]): MappingResult[(A, B)] =
+      (self, that) match {
+        case (Success(warnings1, value1), Success(warnings2, value2)) =>
+          Success(warnings1 ++ warnings2, (value1, value2))
+        case (Failure(errors), _) => Failure(errors)
+        case (_, Failure(errors)) => Failure(errors)
+      }
+
+    def zipWith[B, C](that: MappingResult[B])(f: (A, B) => C): MappingResult[C] = (self zip that).map(f.tupled)
+  }
   object MappingResult {
     final case class Success[+A](warnings: List[String], value: A) extends MappingResult[A]
     final case class Failure(errors: List[String])                 extends MappingResult[Nothing]
+
+    def fromOption[A](option: Option[A], error: String): MappingResult[A] =
+      option match {
+        case None    => Failure(error :: Nil)
+        case Some(v) => Success(Nil, v)
+      }
   }
 
   final case class SchemaMapping(map: ContactsCSV => MappingResult[ContactsCSV]) { self =>
@@ -260,7 +323,7 @@ object contact_processing {
     ): SchemaMapping = ???
 
     /**
-     * EXERCISE 5
+     * EXERCISE 6
      *
      * Add a constructor for `SchemaMapping` that moves the column of the
      * specified name to the jth position.
@@ -268,7 +331,7 @@ object contact_processing {
     def relocate(column: String, j: Int): SchemaMapping = ???
 
     /**
-     * EXERCISE 6
+     * EXERCISE 7
      *
      * Add a constructor for `SchemaMapping` that deletes the column of the
      * specified name.
@@ -277,7 +340,7 @@ object contact_processing {
   }
 
   /**
-   * EXERCISE 7
+   * EXERCISE 8
    *
    * Create a schema mapping that can remap the user's uploaded schema into the
    * company's official schema for contacts, by composing schema mappings
@@ -333,7 +396,11 @@ object ui_events {
      * Add a method `+` that composes two listeners into a single listener,
      * by sending each game event to both listeners.
      */
-    def +(that: Listener): Listener = ???
+    def +(that: Listener): Listener =
+      Listener { event =>
+        self.onEvent(event)
+        that.onEvent(event)
+      }
 
     /**
      * EXERCISE 2
@@ -360,6 +427,21 @@ object ui_events {
      */
     def debug: Listener = ???
   }
+
+  /**
+   * EXERCISE 5
+   *
+   * Create a composite listener that runs all of the following three
+   * listeners in response to each game event, making the gfxUpdateListener
+   * run on the `uiExecutionContext`, and debugging the input events.
+   */
+  lazy val solution = ???
+
+  lazy val twinkleAnimationListener: Listener = ???
+  lazy val motionDetectionListener: Listener  = ???
+  lazy val gfxUpdateListener: Listener        = ???
+
+  lazy val uiExecutionContext: scala.concurrent.ExecutionContext = ???
 }
 
 /**
@@ -383,9 +465,7 @@ object education {
     final case class TrueFalse(question: String, checker: Checker[Boolean]) extends Question[Boolean]
   }
 
-  final case class QuizResult(correctPoints: Int, bonusPoints: Int, wrongPoints: Int, wrong: Vector[String]) {
-    def totalPoints: Int = correctPoints - wrongPoints
-
+  final case class QuizResult(correctPoints: Int, bonusPoints: Int, wrongPoints: Int, wrong: Vector[String]) { self =>
     def toBonus: QuizResult = QuizResult(0, bonusPoints + correctPoints, 0, Vector.empty)
 
     /**
@@ -394,7 +474,13 @@ object education {
      * Add a `+` operator that combines this quiz result with the specified
      * quiz result.
      */
-    def +(that: QuizResult): QuizResult = ???
+    def +(that: QuizResult): QuizResult =
+      QuizResult(
+        self.correctPoints + that.correctPoints,
+        self.bonusPoints + that.bonusPoints,
+        self.wrongPoints + that.wrongPoints,
+        self.wrong ++ that.wrong
+      )
   }
   object QuizResult {
 
@@ -426,11 +512,11 @@ object education {
     /**
      * EXERCISE 5
      *
-     * Add a conditional operator which, if the user gets this quiz right
-     * enough, as determined by the specified cutoff, will do the `ifPass`
-     * quiz afterward; but otherwise, do the `ifFail` quiz.
+     * Add a conditional operator that calls the specified function on the result of running the
+     * quiz, and if it returns true, will execute the `ifPass` quiz afterward; but otherwise, will
+     * execute the `ifFail` quiz.
      */
-    def conditional(cutoff: Int)(ifPass: Quiz, ifFail: Quiz): Quiz = ???
+    def check(f: QuizResult => Boolean)(ifPass: Quiz, ifFail: Quiz): Quiz = ???
   }
   object Quiz {
     private def grade[A](f: String => A, checker: Checker[A]): QuizResult =
@@ -467,7 +553,7 @@ object education {
      * Add an `empty` Quiz that does not ask any questions and only returns
      * an empty QuizResult.
      */
-    def empty: Quiz = ???
+    def empty: Quiz = Quiz(() => QuizResult.empty)
   }
 
   final case class Checker[-A](points: Int, isCorrect: A => Either[String, Unit])

@@ -24,19 +24,29 @@ package net.degoes
  * executable code or into another lower-level domain, which provides the
  * capabilities modeled by the functional domain.
  *
- * Executable encodings are "open": anyone can add new constructors and 
- * operators, without updating existing code. On the other hand, executable 
+ * Executable encodings are "open": anyone can add new constructors and
+ * operators, without updating existing code. On the other hand, executable
  * encodings are not "introspectable": because they are not data, but rather,
- * opaque executable machinery, they cannot be serialized, optimized, or 
+ * opaque executable machinery, they cannot be serialized, optimized, or
  * converted to other encodings.
- * 
- * Abstract encodings are "introspectable": because they are pure data, they 
+ *
+ * Abstract encodings are "introspectable": because they are pure data, they
  * can be serialized, optimized, and converted to other encodings, assuming
  * their component parts have the same properties (not all abstract encodings
- * do; if you embed a function inside an abstract encoding, it's becomes 
+ * do; if you embed a function inside an abstract encoding, it's becomes
  * opaque). On the other hand, abstract encodings are "closed": no one can add
  * new constructors or operators, without updating existing code.
- * 
+ *
+ * Summarizing the difference between executable and abstract encodings:
+ *
+ *  - Executable encodings have open constructors/operators, but closed
+ *    interpreters.
+ *  - Declarative encodings have closed constructors/operators, but open
+ *    interpreters.
+ *
+ * Note: Tagless-final an executable encoding, but where by making the "solutions"
+ * polymorphic, the choice of executor can be deferred arbitrarily.
+ *
  * Legacy code prefers executable encodings; while many benefits of Functional
  * Design can be seen best using abstract encodings.
  *
@@ -137,10 +147,10 @@ object contact_processing2 {
   def run(mapping: SchemaMapping2, contacts: ContactsCSV): MappingResult[ContactsCSV] = ???
 
   /**
-   * EXERCISE 6
+   * BONUS EXERCISE
    *
-   * Implement an optimizer for the `SchemaMapping` model that detects and eliminates
-   * redundant renames; e.g. renaming "name" to "first_name", and then back to "name".
+   * Implement an optimizer for the `SchemaMapping` model that pushes deletes to the front of the
+   * schema mapping in cases where doing so wouldn't later the result.
    */
   def optimize(schemaMapping: SchemaMapping2): SchemaMapping2 =
     ???
@@ -229,7 +239,7 @@ object email_filter2 {
   /**
    * EXERCISE 9
    *
-   * Implement a function to print out an English-readable description of an
+   * Implement a function to make an English-readable description of an
    * `EmailFilter`.
    */
   def describe(filter: EmailFilter): Unit = ???
@@ -246,7 +256,7 @@ object spreadsheet2 {
     def cols: Int
     def rows: Int
 
-    def valueAt(col: Int, row: Int): CellContents
+    def valueAt(col: Int, row: Int): CalculatedValue
 
     final def scan(range: Range): Stream[Cell] = {
       val minRow = range.minRow.getOrElse(0)
@@ -269,61 +279,58 @@ object spreadsheet2 {
     def row(i: Int): Range = Range(Some(i), Some(i), None, None)
   }
 
-  final case class Cell(col: Int, row: Int, contents: CellContents)
+  final case class Cell(col: Int, row: Int, contents: CalculatedValue)
 
-  sealed trait CellContents
-  object CellContents {
-    sealed trait Static extends CellContents
-    object Static {
-      final case class Error(message: String) extends Static
-      final case class Str(value: String)     extends Static
-      final case class Dbl(value: Double)     extends Static
-    }
+  sealed trait Value
+  object Value {
+    final case class Error(message: String) extends Value
+    final case class Str(value: String)     extends Value
+    final case class Dbl(value: Double)     extends Value
+  }
 
-    sealed trait Expr extends CellContents {
+  sealed trait CalculatedValue { self =>
 
-      /**
-       * EXERCISE 1
-       *
-       * Add some operators to transform one `Expr` into another `Expr`. For
-       * example, one operator could "negate" a double expression.
-       */
-      def negate: Expr = ???
+    /**
+     * EXERCISE 1
+     *
+     * Add some operators to transform one `CalculatedValue` into another `CalculatedValue`. For
+     * example, one operator could "negate" a double CalculatedValue.
+     */
+    def negate: CalculatedValue = ???
 
-      /**
-       * EXERCISE 2
-       *
-       * Add some operators to combine `Expr`. For example, one operator
-       * could sum two double expressions.
-       */
-      def sum(that: Expr): Expr = ???
-    }
-    object Expr {
+    /**
+     * EXERCISE 2
+     *
+     * Add some operators to combine `CalculatedValue`. For example, one operator
+     * could sum two double CalculatedValueessions.
+     */
+    def sum(that: CalculatedValue): CalculatedValue = ???
+  }
+  object CalculatedValue {
 
-      /**
-       * EXERCISE 3
-       *
-       * Add a constructor that makes an Expr from a CellContents.
-       */
-      def const(contents: CellContents): Expr = ???
+    /**
+     * EXERCISE 3
+     *
+     * Add a constructor that makes an CalculatedValue from a Value.
+     */
+    def const(contents: Value): CalculatedValue = ???
 
-      /**
-       * EXERCISE 4
-       *
-       * Add a constructor that provides access to the value of the
-       * specified cell, identified by col/row.
-       */
-      def at(col: Int, row: Int): Expr = ???
-    }
+    /**
+     * EXERCISE 4
+     *
+     * Add a constructor that provides access to the value of the
+     * specified cell, identified by col/row.
+     */
+    def at(col: Int, row: Int): CalculatedValue = ???
   }
 
   /**
    * EXERCISE 5
    *
-   * Implement an interpreter for the `CellContents.Expr` model that translates it into
-   * static cell contents by evaluating the expression.
+   * Implement an interpreter for the `Value.CalculatedValue` model that translates it into
+   * static cell contents by evaluating the CalculatedValueession.
    */
-  def evaluate(spreadsheet: Spreadsheet, cell: Cell): CellContents.Static = ???
+  def evaluate(spreadsheet: Spreadsheet, cell: Cell): Value = ???
 }
 
 /**
@@ -359,17 +366,32 @@ object ecommerce_marketing {
     sealed trait Pattern { self =>
       def +(that: Pattern): Pattern = Pattern.Sequence(self, that)
 
+      def atLeast(n: Int): Pattern = repeat(Some(n), None)
+
+      def atMost(n: Int): Pattern = repeat(None, Some(n))
+
+      def between(min: Int, max: Int): Pattern = repeat(Some(min), Some(max))
+
       def repeat(min: Option[Int], max: Option[Int]): Pattern = Pattern.Repeat(self, min, max)
     }
     object Pattern {
-
-      case class HasAttribute(attr: Attribute)                                      extends Pattern
-      final object HasAnyAttribute                                                  extends Pattern
+      case object HasAnyAttribute                                                   extends Pattern
+      final case class HasAttribute(attr: Attribute)                                extends Pattern
       final case class HasValue(attr: Attribute, value: Value)                      extends Pattern
       final case class Sequence(first: Pattern, second: Pattern)                    extends Pattern
       final case class Repeat(pattern: Pattern, min: Option[Int], max: Option[Int]) extends Pattern
+
+      val hasAnyAttribute: Pattern = HasAnyAttribute
+
+      def hasAttribute(attr: Attribute): Pattern = HasAttribute(attr)
+
+      def hasValue(attr: Attribute, value: Value): Pattern = HasValue(attr, value)
     }
     import Pattern._
+
+    val example =
+      hasAnyAttribute +
+        hasAttribute(Attribute.ShoppingCartId)
 
     def matches(history: List[Event], pattern: Pattern): Boolean = {
       def loop(history: List[Event], pattern: Pattern): (List[Event], Boolean) =
@@ -416,5 +438,14 @@ object ecommerce_marketing {
    */
   object executable_encoding {
     type Pattern
+    object Pattern {
+      val hasAnyAttribute: Pattern = ???
+
+      def hasAttribute(attr: Attribute): Pattern = ???
+
+      def hasValue(attr: Attribute, value: Value): Pattern = ???
+
+      def partial(pf: PartialFunction[List[Event], (List[Event], Boolean)]): Pattern = ???
+    }
   }
 }

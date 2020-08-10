@@ -1,6 +1,5 @@
 package net.degoes
 
-package net.degoes
 /*
  * INTRODUCTION
  *
@@ -29,7 +28,7 @@ package net.degoes
  * * Orthogonal, such that no primitive provides the capabilities of any other
  *
  * Orthogonality also implies minimalism, which means the primitives are the
- * smallest set of orthogonal primitives that exist.ww
+ * smallest set of orthogonal primitives that exist.
  *
  */
 
